@@ -19,6 +19,15 @@ User asks to open, view, or download a Harris County Clerk foreclosure (FRCL-YYY
 
 Verified working flow. Documents are image-only PDFs (no text layer) — verify visually.
 
+## Output convention (READ FIRST)
+
+- **Save location**: `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/<DocID>.pdf`
+  - `<FilingYear>`: the filing year, the year value you SELECT on the search form (the `ddlYear` control).
+  - `<FilingMonth>`: the filing month, a **capitalized English word** taken from the `ddlMonth` drop-down you SELECT (e.g. `October`, `November`, `March`). Never use a numeric month.
+  - `mkdir -p /home/ttran/foreclose_file/<FilingYear>/<FilingMonth>` before writing the PDF.
+- Before downloading, scan the **target (YEAR, MONTH) subdirectory only** for existing `<DocID>.pdf` and **skip** any IDs already present (no overwrite, no re-fetch). Do NOT check sibling folders or the bare base folder.
+- Report: skipped IDs (already present in that folder), and for new downloads — full path under `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/<DocID>.pdf`, HTTP status, `file` output, and key document facts (title, party, sale date) so provenance is visible.
+
 ## 1. Search form (FRCL_R.aspx)
 
 Open `https://www.cclerk.hctx.net/applications/websearch/FRCL_R.aspx`. Elements (ASP.NET WebForms IDs):
