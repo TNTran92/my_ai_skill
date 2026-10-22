@@ -16,7 +16,12 @@ metadata:
 
 ## When to Use
 
-User asks to read a Harris County FRCL-YYYY-NNNN notice PDF (in /home/ttran/foreclose_file or the folder the user names) and record its sale details into property_data.csv in the SAME folder as the PDF. New listings are appended; an existing row is updated only if content differs.
+User asks to read a Harris County FRCL-YYYY-NNNN notice PDF (in /home/ttran/foreclose_file or the folder the user names) and record its sale details into property_data.csv.
+
+## Ledger location (hard rule)
+
+CSV target: /home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/property_data.csv — the PDF's own directory (FilingYear, FilingMonth from the /home/ttran/foreclose_file/<year>/<month> layout; the FilingYear in the FRCL-XXXX-NNNN doc ID must agree).
+**Precondition: that directory must already exist.** If it does NOT exist when the skill runs, STOP immediately — report that the folder is missing and do nothing else. Do NOT create it (no mkdir), do NOT save the CSV elsewhere, do NOT proceed to extraction.
 
 ## Fields (extracted verbatim from the notice)
 
@@ -32,7 +37,7 @@ User asks to read a Harris County FRCL-YYYY-NNNN notice PDF (in /home/ttran/fore
    - Then vision_analyze on the rendered PNG asking to transcribe EXACTLY, verbatim, the four fields above, quoting each section's full text.
    - Read the attached screenshot yourself and copy field text verbatim (keep case, punctuation, clause text). Never normalize street numbers or dates.
 2. Timestamps: run date '+%Y-%m-%d %H:%M' for Date Added / Time Added (actual clock, not document dates).
-3. Ledger CSV file name is property_data.csv. Exact header:
+3. Ledger path is the hard-rule target above: /home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/property_data.csv (verify the directory exists FIRST — if not, stop per Precondition). Exact header:
    File Name,Date of Sale,Earliest Time Sale Will Begin,Place of Sale of Property,Legal Description,Date Added,Time Added
    - File Name = PDF filename WITHOUT extension (e.g. FRCL-2026-7208) - the dedup key.
    - Wrap any field containing commas (Place, Legal Description) in double quotes; escape inner quotes by doubling.
