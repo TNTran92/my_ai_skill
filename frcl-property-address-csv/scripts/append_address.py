@@ -4,12 +4,15 @@
 Parallel-safe and idempotent:
   * exclusive `fcntl.flock` on a sidecar <csv>.lock  -> serializes concurrent writers
   * writes to a temp file then os.replace()          -> readers never see a torn file
-  * re-running for the same --case just overwrites that one cell
+  * if the row's address cell is already filled, the case is SKIPPED (no
+    file change); pass --force to overwrite an existing value
 Requires POSIX (Linux/macOS).
 
 Usage:
   python3 append_address.py --csv PATH --case FRCL-2026-7606 \
       --address "2847 Trail Lake Drive, Houston, TX 77045"
+  python3 append_address.py --csv PATH --case FRCL-2026-7606 \
+      --address "..." --force    # overwrite an already-recorded address
 """
 import argparse
 import contextlib
@@ -30,6 +33,7 @@ def main():
     ap.add_argument("--case", required=True, help="Exact File Name cell, e.g. FRCL-2026-7606")
     ap.add_argument("--address", required=True, help="Physical/street address value")
     ap.add_argument("--col", default="Property Address", help="Column name (default: Property Address)")
+    ap.add_argument("--force", action="store_true", help="Overwrite even if the cell already has an address (default: skip)")
     a = ap.parse_args()
 
     csv_path = os.path.abspath(a.csv)
@@ -61,13 +65,20 @@ def main():
             while len(r) < len(header):
                 r.append("")
 
-        matched = 0
+        matched = []
         for r in rows[1:]:
             if (r[0] or "").strip() == a.case:
-                r[idx] = a.address
-                matched += 1
-        if matched != 1:
-            die(f"expected exactly 1 row for {a.case!r}; matched {matched}")
+                matched.append(r)
+        if len(matched) != 1:
+            die(f"expected exactly 1 row for {a.case!r}; matched {len(matched)}")
+
+        # skip if the address is already recorded (unless --force)
+        cur = (matched[0][idx] or "").strip() if idx < len(matched[0]) else ""
+        if cur and not a.force:
+            print(f"SKIPPED: {a.case} already has address {cur!r}; use --force to overwrite")
+            return
+        overwrote = bool(cur)
+        matched[0][idx] = a.address
 
         # atomic write: temp file in the same dir, then os.replace
         tfd, tmp = tempfile.mkstemp(dir=dir_, prefix=".addr-", suffix=".csv")
@@ -82,7 +93,8 @@ def main():
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
             raise
-        print(f"OK: {a.case} -> {a.address!r}  [{a.col}] = column #{idx + 1}; total data rows {len(rows) - 1}")
+        ok = "OK (overwrote existing address):" if overwrote else "OK:"
+        print(f"{ok} {a.case} -> {a.address!r}  [{a.col}] = column #{idx + 1}; total data rows {len(rows) - 1}")
     finally:
         try:
             fcntl.flock(lid, fcntl.LOCK_UN)
