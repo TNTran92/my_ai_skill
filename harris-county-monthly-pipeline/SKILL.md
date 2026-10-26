@@ -25,11 +25,11 @@ The selected (year, month) drives BOTH steps and becomes the folder + ledger pat
 
 ## The pipeline (strict order)
 
-### Step 1 — Pull the month's notices
+### Step 1 — Pull the month's notices (unfetched only)
 Skill: `harris-county-foreclosure-downloads`.
-- Crawl ALL result pages of `FRCL_R.aspx` for (mode, year, month); collect the `a.doclinks` hrefs (never open the viewer tab — the ID token is session-bound).
-- Skip any `<DocID>.pdf` already present in the target folder; download the rest to
-  `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/<DocID>.pdf`.
+- **Unfetched only, decided before any download:** compute the fetch set as `new = DocIDs listed on FRCL_R − DocIDs whose <DocID>.pdf already exists in /home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/`. Fetch ONLY DocIDs in `new` — never re-fetch, overwrite, or re-download a document that is already in the folder, on either the initial run or a resumed one. If `new` is empty, skip the download phase entirely and report every listed DocID as skipped.
+- Crawl ALL result pages of `FRCL_R.aspx` for (mode, year, month); collect the `a.doclinks` hrefs (never open the viewer tab — the ID token is session-bound) and filter the href list to the `new` DocIDs before the download wave.
+- Download each doc in `new` to `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/<DocID>.pdf`.
 - Done when the folder holds every new notice PDF for that (year, month) and the report lists new vs skipped + a `file` check per new PDF.
 
 ### Step 2 — Extract the sale fields into the ledger
@@ -46,6 +46,7 @@ Skill: `harris-county-sale-data-csv`.
 3. **Idempotent, resumable.** Both steps skip work already done (Step 1 skips existing PDFs; Step 2 skips existing File Names). It is therefore safe to re-run after a session reset or crash. Do not force a redo unless the user explicitly asks to refresh a row (then use the sibling's compare-and-update semantics).
 4. **Image-only PDFs — no text layer.** Empty `pdftotext` output means RENDER + `vision_analyze`, never "no data." Transcribe the four fields verbatim (case, punctuation, the fallback clause); never normalize street numbers or dates.
 5. **Concurrency caps (host-limited endpoint).** Step 1: 8-way parallel `curl` is fine. Step 2: **2 child workers MAX**, rolling waves of 5–10 docs; merge each worker's rows into the ledger the instant that worker returns (never batch-merge at wave end); salvage a dead worker's partial `rows.jsonl` and re-list its missing PDFs.
+6. **Unfetched only — never re-fetch.** Step 1 downloads ONLY the DocIDs whose `<DocID>.pdf` is absent from `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/`; anything already on disk is skipped, not re-downloaded or overwritten. Pulling an already-fetched document is an error unless the user explicitly asks to refresh that specific doc.
 
 ## Handoff invariant (what binds Step 1 → Step 2)
 - **Artifact:** the notice PDFs in `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/`.
