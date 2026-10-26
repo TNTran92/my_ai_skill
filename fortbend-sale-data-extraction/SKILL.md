@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [foreclosure, fort-bend, pdf, csv, extraction]
-    related_skills: [fortbend-foreclosure-monthly-pdfs, harris-county-foreclosure-downloads, harris-county-sale-data-csv]
+    related_skills: [fortbend-monthly-pipeline, fortbend-foreclosure-monthly-pdfs, harris-county-foreclosure-downloads, harris-county-sale-data-csv, fortbend-legal-desc-to-address, fortbend-legal-desc-standardization]
 ---
 
 ## When to Use
@@ -15,6 +15,10 @@ metadata:
 - Rebuilding/refreshing an existing `property_data.csv` for that folder (preserves each row's original Date/Time Added).
 - Debugging why one PDF's field came out null — use the per-PDF probe below.
 - Do NOT use for Harris County clerk-site downloads (see harris-county-* skills) or Fort Bend PDF collection (see fortbend-foreclosure-monthly-pdfs).
+- Pipeline position: steps 1–2 of the full monthly pipeline (see `fortbend-monthly-pipeline`, which holds the order, scope rules, and per-step done-criteria).
+- Post-process a finished `property_data.csv` (sort by File Name, collapse same-property duplicate rows into one fully populated row) without touching extracted values — workflow in `references/csv-collapse.md`.
+- Standardize the Legal Description column of a finished `property_data.csv` into clean deed-style sentences — see the `fortbend-legal-desc-standardization` skill.
+- Fill/verify `Property Address` for rows that have a Legal Description (subdivision/section/block/lot) — the `fortbend-legal-desc-to-address` skill resolves it against the FBCAD ArcGIS tax roll. This is a separate, user-scoped step; only do it when asked.
 
 # Fort Bend Sale-Data CSV Extraction
 
@@ -70,6 +74,7 @@ python3 -c "import importlib.util as u; s=u.spec_from_file_location('fb','<skill
 - **True nulls are normal**: ~50 pages say "described in the attached Exhibit A" and the exhibit page isn't in the folder; ~60 pages have no day digit or time, or only a city line without a street line. Blank is CORRECT — never fabricate, never treat as failure.
 - **Interrupted `execute_code` calls roll back patches made inside them.** After any batch of patches, re-verify on disk (check each marker string is present) before re-running. (Bit us twice in October 2026.)
 - **Subagent fan-out is unreliable on this host for this work** (concurrency-limited endpoint stalls). Do the whole batch directly in the session — it's fast (~15s) anyway.
+- **Pipeline steps are separate and user-scoped: extract → sort/collapse.** When asked only to sort or collapse the CSV, do exactly that — never backfill missing cells from the PDFs. Backfill is the prior extraction step; the user flags it when a step overreaches.
 - Dates normalize to `M/D/YYYY`; times to `H:MM AM|PM` (default PM when missing). Everything else stays verbatim.
 
 ## When a new month has misses
