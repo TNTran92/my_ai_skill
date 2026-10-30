@@ -35,7 +35,7 @@ Skill: `harris-county-foreclosure-downloads`.
 ### Step 2 — Extract the sale fields into the ledger
 Skill: `harris-county-sale-data-csv`.
 - Precondition (HARD): the Step 1 folder must already exist. If it does not, STOP — do not create it, do not silently rerun Step 1.
-- For each unrecorded PDF: `pdftoppm -png -r 200` render, then `vision_analyze` for the four verbatim fields (Date of Sale, Earliest Time Sale Will Begin, Place of Sale of Property, Legal Description).
+- For each unrecorded PDF: `pdftoppm -png -r 300` render (300dpi field-verified; at 200dpi digits misread), then `vision_analyze` for the four verbatim fields (Date of Sale, Earliest Time Sale Will Begin, Place of Sale of Property, Legal Description).
 - Dedup key = File Name (PDF basename sans extension); skip anything already in `property_data.csv`.
 - Append / update the row in `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/property_data.csv`.
 - Done when `cat` of the CSV shows each new File Name exactly once, other rows intact, and the report lists new / updated (what changed) / unchanged / skipped.
@@ -45,7 +45,7 @@ Skill: `harris-county-sale-data-csv`.
 2. **One folder, one date.** Both steps read/write the SAME `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/`. The (year, month) selected in Step 1 is the hard-rule ledger target in Step 2 — the FRCL id's FilingYear must agree with the folder's year. Never let the two steps disagree on the month.
 3. **Idempotent, resumable.** Both steps skip work already done (Step 1 skips existing PDFs; Step 2 skips existing File Names). It is therefore safe to re-run after a session reset or crash. Do not force a redo unless the user explicitly asks to refresh a row (then use the sibling's compare-and-update semantics).
 4. **Image-only PDFs — no text layer.** Empty `pdftotext` output means RENDER + `vision_analyze`, never "no data." Transcribe the four fields verbatim (case, punctuation, the fallback clause); never normalize street numbers or dates.
-5. **Concurrency caps (host-limited endpoint).** Step 1: 8-way parallel `curl` is fine. Step 2: **2 child workers MAX**, rolling waves of 5–10 docs; merge each worker's rows into the ledger the instant that worker returns (never batch-merge at wave end); salvage a dead worker's partial `rows.jsonl` and re-list its missing PDFs.
+5. **Concurrency caps (host-limited endpoint).** Step 1: 8-way parallel `curl` is fine. Step 2: **2 child workers MAX per host**, rolling waves of 5–10 docs; endorsed extension — scripted ollamacuda.home workers run alongside over a DISJOINT chunk of the same unrecorded list (Ollama requests on the box serialize: ETA math must assume that; see the sibling's OCR-offload section); merge each worker's rows into the ledger the instant that worker returns (never batch-merge at wave end); salvage a dead worker's partial `rows.jsonl` and re-list its missing PDFs.
 6. **Unfetched only — never re-fetch.** Step 1 downloads ONLY the DocIDs whose `<DocID>.pdf` is absent from `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/`; anything already on disk is skipped, not re-downloaded or overwritten. Pulling an already-fetched document is an error unless the user explicitly asks to refresh that specific doc.
 
 ## Handoff invariant (what binds Step 1 → Step 2)
@@ -55,11 +55,15 @@ Skill: `harris-county-sale-data-csv`.
 
 ## Definition of done (monthly)
 - `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/` contains the month's notice PDFs AND a `property_data.csv` whose new File Names each appear exactly once.
-- CSV header is exactly: `File Name,Date of Sale,Earliest Time Sale Will Begin,Place of Sale of Property,Legal Description,Date Added,Time Added`.
+- CSV header is exactly: `File Name,Date of Sale,Earliest Time Sale Will Begin,Place of Sale of Property,Legal Description,Date Added,Time Added,Property Address` — the last column is filled per-row by `frcl-property-address-csv` (notice's `Property Address:` line first, HCAD GIS query second); a blank address cell is a known pending state, and the row must not be left with any OTHER field blank.
 - Final report lists, per step: new, updated (what changed), unchanged, skipped — and every blank/failed row carries a stated reason.
 
 ## Cross-cutting pitfalls (apply to both steps)
 - **Browser session resets between turns** — Step 1's navigate → select → search → collect-links must be ONE `browser_exec` call; `js()` is pinned to an attached tab and must be a zero-arg IIFE.
 - **Notices are filed days before sale** — a Date of Sale later than today is normal, not a data error.
 - **Place of Sale fallback clause** (OR IN THE AREA DESIGNATED BY THE COMMISSIONER'S COURT…) is legally meaningful — capture the full clause, not just the venue.
+- **Separator fields vary by doc template** (time: `10:00` / `10.00` / `10 00` AM; statute `51.002` / `51 002`) and LLM transcribers silently normalize them — after each merged wave, audit every doc's time token + statute separator via 300dpi band crop / 600dpi token zoom (procedure in the sibling skill).
+- **Page-1 date trap** — a worker that reads only page 1 records the p1 `DATE:`/Note/DOT date as the sale date and leaves the rest blank, while reporting `status=ok`. Audit gate: a row with a non-blank Date of Sale but blank time/place is FAILURE (the date often carries a different month/year), not partial success — locate the real "DATE AND TIME OF SUBSTITUTE TRUSTEE'S SALE" block (page 2 usually; every page of a bundle) and re-extract. Procedure in `harris-county-sale-data-csv`.
+- **Sale dates and templates change mid-folder** — one month's folder can hold multiple sale dates and layouts; read each doc's own date, never assume the month's dominant one.
+- **A concurrent session can rewrite the shared ledger underfoot** — when its row set no longer matches this run's `rows.jsonl` history, rebuild the kept row set from that ground truth and take a full backup before rewriting (recipe in `harris-county-sale-data-csv`); reconcile per File Name, never by row count or mtime.
 - **No pip into the Hermes venv** (there is no pip); the working path is system `pdftotext`/`pdftoppm` + `vision_analyze`.
