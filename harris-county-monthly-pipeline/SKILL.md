@@ -1,7 +1,7 @@
 ---
 name: harris-county-monthly-pipeline
 description: Use when running the monthly Harris County FRCL pipeline.
-version: 1.0.0
+version: 1.1.0
 author: TNTran92
 license: MIT
 platforms: [linux, macos, windows]
@@ -38,7 +38,19 @@ Skill: `harris-county-sale-data-csv`.
 - For each unrecorded PDF: `pdftoppm -png -r 300` render (300dpi field-verified; at 200dpi digits misread), then `vision_analyze` for the four verbatim fields (Date of Sale, Earliest Time Sale Will Begin, Place of Sale of Property, Legal Description).
 - Dedup key = File Name (PDF basename sans extension); skip anything already in `property_data.csv`.
 - Append / update the row in `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/property_data.csv`.
-- Done when `cat` of the CSV shows each new File Name exactly once, other rows intact, and the report lists new / updated (what changed) / unchanged / skipped.
+- Done when `cat` of the CSV shows each new File Name exactly once, other rows intact, and the report lists new / updated (what changed) / unchanged / skipped. (Per-session done = this session's own batch of ≤10 listings satisfies this and the handoff report is issued — see Session batching.)
+
+## Session batching (hard cap: 10 listings per session)
+- **Listing** = one unrecorded notice PDF in the (year, month) folder (its File Name absent from `property_data.csv`).
+- **Each session extracts AT MOST 10 listings** into the ledger, then STOPS — even if more remain and the context window still looks fine. Long sessions die mid-batch (context overflow, endpoint stalls) and a mid-wave session reset is exactly the incident that forces ledger repair; a clean 10-cap boundary is the cheapest possible resume unit.
+- **Step 1 downloads do not count against the cap** — they are near-instant `curl`s and are deliberately pre-fetched ahead of extraction. A session may download the whole month's `new` set in Step 1, then extract only 10.
+- On reaching the cap (or when no unrecorded PDFs remain), STOP and emit the **handoff report** before any further tool calls:
+  - folder path + total PDF count;
+  - done this session: the File Names (≤10);
+  - outstanding: count remaining + first File Name to pick up;
+  - exact resume line: `new session → re-run harris-county-monthly-pipeline for the same (date mode), (year, month)` — hard rule 3 (idempotent/resumable) means the new session continues exactly where this one stopped (Step 1 skips PDFs on disk, Step 2 skips recorded File Names).
+- **Continuation ALWAYS runs in a fresh top-level session** (user starts a new agent session and re-issues the same year/month request) — never by letting the same conversation grind past the cap. If the user says "continue" mid-session, treat it as a request for the handoff report + a new session; do not silently break the cap.
+- The cap is per-SESSION, not per-wave: the 5–10 doc waves of hard rule 5 must fit under the session's remaining budget (e.g. 5+5, or a single wave of 10; never a second wave once 10 are already in the ledger this session).
 
 ## Hard rules (cost real time when broken)
 1. **Step order is enforced by the folder.** Step 1 does the `mkdir -p <year>/<month>`; Step 2 has a hard precondition that the folder already exists. So Step 1 always runs before Step 2 — and never backfill Step 2 data while "finishing" Step 1, or vice versa.
@@ -54,6 +66,7 @@ Skill: `harris-county-sale-data-csv`.
 - **Field scope:** Step 2 transcribes the notice's OWN Property / Legal Description section — NOT any attached metes-and-bounds EXHIBIT (a separate coordinate-table document). Multi-page notices: follow the legal description onto page 2 verbatim (one space at joins).
 
 ## Definition of done (monthly)
+- **Per session (binding):** ≤10 listings merged into the ledger + the handoff report from Session batching. End-of-session with outstanding > 0 but a clean handoff report is a SUCCESSFUL session, not a failure; the monthly DoD below lands when the last such session ends.
 - `/home/ttran/foreclose_file/<FilingYear>/<FilingMonth>/` contains the month's notice PDFs AND a `property_data.csv` whose new File Names each appear exactly once.
 - CSV header is exactly: `File Name,Date of Sale,Earliest Time Sale Will Begin,Place of Sale of Property,Legal Description,Date Added,Time Added,Property Address` — the last column is filled per-row by `frcl-property-address-csv` (notice's `Property Address:` line first, HCAD GIS query second); a blank address cell is a known pending state, and the row must not be left with any OTHER field blank.
 - Final report lists, per step: new, updated (what changed), unchanged, skipped — and every blank/failed row carries a stated reason.
@@ -62,7 +75,7 @@ Skill: `harris-county-sale-data-csv`.
 - **Browser session resets between turns** — Step 1's navigate → select → search → collect-links must be ONE `browser_exec` call; `js()` is pinned to an attached tab and must be a zero-arg IIFE.
 - **Notices are filed days before sale** — a Date of Sale later than today is normal, not a data error.
 - **Place of Sale fallback clause** (OR IN THE AREA DESIGNATED BY THE COMMISSIONER'S COURT…) is legally meaningful — capture the full clause, not just the venue.
-- **Separator fields vary by doc template** (time: `10:00` / `10.00` / `10 00` AM; statute `51.002` / `51 002`) and LLM transcribers silently normalize them — after each merged wave, audit every doc's time token + statute separator via 300dpi band crop / 600dpi token zoom (procedure in the sibling skill).
+- **Separator fields vary by doc template** (time: `10:00` / `10.00` / `10 00` AM; statute `51.002` / `51 002`; venue preposition/exhibit/possessive: `AT THE` / `OF THE`, `EXHIBIT (B)` / `EXHIBIT B`, `COMMISSIONER'S` / `COMMISSIONERS'`) and LLM transcribers silently normalize them — after each merged wave, audit every doc's time token + statute separator + venue boilerplate via 300dpi band crop / a 600dpi- or crop-plus-4x-upscale token zoom (procedure in the sibling skill). Two matching transcriptions of a confusable token is NOT confirmation — the zoom is the tiebreaker.
 - **Page-1 date trap** — a worker that reads only page 1 records the p1 `DATE:`/Note/DOT date as the sale date and leaves the rest blank, while reporting `status=ok`. Audit gate: a row with a non-blank Date of Sale but blank time/place is FAILURE (the date often carries a different month/year), not partial success — locate the real "DATE AND TIME OF SUBSTITUTE TRUSTEE'S SALE" block (page 2 usually; every page of a bundle) and re-extract. Procedure in `harris-county-sale-data-csv`.
 - **Sale dates and templates change mid-folder** — one month's folder can hold multiple sale dates and layouts; read each doc's own date, never assume the month's dominant one.
 - **A concurrent session can rewrite the shared ledger underfoot** — when its row set no longer matches this run's `rows.jsonl` history, rebuild the kept row set from that ground truth and take a full backup before rewriting (recipe in `harris-county-sale-data-csv`); reconcile per File Name, never by row count or mtime.
